@@ -96,8 +96,8 @@ class NaverNewsCrawler:
         for subcategory, subcategory_name in zip(subcategory_value_list, subcategory_key_list):
             logger.exception(f'[{pid}][{subcategory_name}] Crawling Start . . .')
             url = find_subcate_url + '&sid2=' + str(subcategory) + '&date=' + str(date)
-        # totalpage는 네이버 페이지 구조를 이용해서 page=10000으로 지정해 totalpage를 알아냄
-        # page=10000을 입력할 경우 페이지가 존재하지 않기 때문에 page=totalpage로 이동 됨 (Redirect)
+            # totalpage는 네이버 페이지 구조를 이용해서 page=10000으로 지정해 totalpage를 알아냄
+            # page=10000을 입력할 경우 페이지가 존재하지 않기 때문에 page=totalpage로 이동 됨 (Redirect)
             totalpage = self.find_news_totalpage(url + '&page=10000')
             made_urls = [url + '&page=' + str(page) for page in range(1, totalpage + 1)]
 
@@ -130,13 +130,16 @@ class NaverNewsCrawler:
                     except:
                         title = soup_1.find('h4', attrs={'class':'title'}).get_text()
 
+                    # try:
+                    #     raw_content = soup_1.find('div', attrs={'id': 'articleBodyContents'})
+                    #     if raw_content.select_one('em'):
+                    #         raw_content.select_one('em').decompose()
+                    #     content = ''.join(raw_content.text.replace('    ', '').replace('\n', '').replace('\t', '').replace('\'', '').strip())
+                    # except:
+                    #     content = ''
                     try:
-                        raw_content = soup_1.find('div', attrs={'id': 'articleBodyContents'})
-                        if raw_content.select_one('em'):
-                            raw_content.select_one('em').decompose()
-                        content = ''.join(raw_content.text.replace('    ', '').replace('\n', '').replace('\t', '').replace('\'', '').strip())
-                    except:
-                        content = ''
+                        content = soup_1.find('div', attrs={'id':'articleBody'})
+                    except: content=''
 
                     elements = (date, sid1, sid2, oid, aid, time, media, writer, title, content, url_list[id])
                     news_info_list.append(elements)
@@ -145,10 +148,11 @@ class NaverNewsCrawler:
 
                     if content != '' and key != '':
                         try:
-                            db_mongo.mongo_insert({'id':key, 'sid':sid1, 'sid2':sid2, 'oid':oid, 'aid':aid,
-                                                   'news_date':date, 'category':'경제', 'subcategory': subcategory,
-                                                   'press':media, 'headline':title, 'body':content, 'article_date':time,
-                                                   'content_url': url_list[id], 'insertTime':datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')}, 'economy', mongo)
+                            db_mongo.mongo_insert({'_id':key, 'sid':sid1, 'sid2':sid2, 'oid':oid, 'aid':aid,
+                                                   'news_date':date, 'category':'경제', 'subcategory': f'{subcategory}',
+                                                   'press':media, 'headline':title, 'body':f'{content}', 'article_date':time,
+                                                   'content_url': url_list[id], 'insertTime':datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')},
+                                                   'news_data', mongo)
                             logger.info(f'[{pid}][경제][{subcategory_name}] DB insert::{date}{title}')
 
                             duplicate = 0
