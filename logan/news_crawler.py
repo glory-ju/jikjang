@@ -4,9 +4,12 @@ import re, os
 import pandas as pd
 import datetime, time
 import multiprocessing
-from multiprocessing import Process
+# from multiprocessing import Process
+from loguru import logger
+import urllib.parse
+import db_mongo
 
-class NaverNewsCrawler():
+class NaverNewsCrawler:
     def __init__(self):
         self.headers = {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36',}
         self.categories = {'정치':100, '경제':101, '사회':102, '생활/문화':103, 'IT/과학':105, '세계':104}
@@ -19,6 +22,7 @@ class NaverNewsCrawler():
     # [경제] - [금융] 카테고리의 당일 총 페이지 수 추출
     def find_news_totalpage(self, url):
         try:
+            logger.info(f'[경제 - 금융 총 페이지 수 !!!]')
             totalpage_url = url
             request_content = requests.get(totalpage_url,headers=self.headers)
             document_content = BeautifulSoup(request_content.content, 'lxml')
@@ -36,6 +40,7 @@ class NaverNewsCrawler():
         soup = BeautifulSoup(page_response.content, 'lxml')
         news_list_select = soup.select('body > div > table > tr > td > div > div > ul > li > dl > dt:nth-child(1) > a')
 
+        logger.info(f'페이지당 뉴스 url 추출 !!!!!!!!!!!!!!!!!!!!!')
         for i in news_list_select:
             url = i['href']
             url = url.replace('amp;', '')
@@ -58,22 +63,40 @@ class NaverNewsCrawler():
             writer = ''
         elif soup_1.find('p', attrs={'class': 'b_text'}):
             writer = soup_1.find('p', attrs={'class': 'b_text'}).get_text().strip()
-        title = soup_1.find('title').get_text()
+        title = soup_1.find('h3', attrs={'id':'articleTitle'}).get_text()
 
         raw_content = soup_1.find('div', attrs={'id': 'articleBodyContents'})
         if raw_content.select_one('em'):
             raw_content.select_one('em').decompose()
+        content = ''.join(raw_content.text.replace('    ','').replace('\n','').replace('\t','').replace('\'','').strip())
 
-        content = raw_content.text.replace('    ', '').strip()
-
-        proc = os.getpid()
-        print(f'Process ID : {proc}')
         elements = (date, sid1, sid2, oid, aid, time, media, writer, title, content, url_list[idx])
         print(elements)
         return elements
 
-    def crawler(self, days):
+    @staticmethod
+    def conn_mongodb(config_t):
+        hostname = config_t['mongoDB']['hostname']
+        port = config_t['mongoDB']['port']
+        username = urllib.parse.quote_plus(config_t['mongoDB']['username'])
+        password = urllib.parse.quote_plus(config_t['mongoDB']['password'])
+        db_name = config_t['mongoDB']['db_name']
+
+        return db_mongo.set_mongodb(hostname, port, username, password, db_name)
+
+    def crawler(self, days, config_t):
         news_info_list = []
+
+        pid = os.getpid()
+        logger.info(f'[{pid}] 경제 - 금융 Crawling Start . . .')
+
+        try:
+            mongo = self.conn_mongodb(config_t)
+        except Exception as eee:
+            logger.critical(f'[{pid}] DB exception::{eee}')
+            logger.critical(f'[{pid}] Crawling STOP ! ! !')
+
+        logger.debug(f'[{pid}] DB connected')
         while True:
             date = datetime.datetime.now()
             yesterday = date - datetime.timedelta(days=days)
@@ -105,10 +128,10 @@ if __name__ == '__main__':
     days = 0
     start_time = time.time()
 
-    day_process = [0, 1, 2, 3]
+    day_process = [0, 1]
 
 # multi processing - Pool : 156sec
-    pool = multiprocessing.Pool(processes=4)
+    pool = multiprocessing.Pool(processes=2)
     pool.map(NaverNewsCrawler().crawler, day_process)
     pool.close()
     pool.join()
@@ -132,7 +155,7 @@ if __name__ == '__main__':
 #     for day in day_process:
 #         crawler = NaverNewsCrawler().crawler(day)
 #     print(time.time() - start_time)
-
+'''
 ############################################################ CATEGORY SLICING ############################################################
 
 import requests
@@ -162,4 +185,4 @@ for i in subcategory_key_list:
     value = subcategories[i]
     subcategory_value_list.append(value)
 
-print(subcategory_value_list)
+'''
