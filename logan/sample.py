@@ -128,10 +128,10 @@ if __name__ == '__main__':
     days = 0
     start_time = time.time()
 
-    day_process = [0, 1, 2, 3]
+    day_process = [0, 1]
 
 # multi processing - Pool : 156sec
-    pool = multiprocessing.Pool(processes=4)
+    pool = multiprocessing.Pool(processes=2)
     pool.map(NaverNewsCrawler().crawler, day_process)
     pool.close()
     pool.join()
