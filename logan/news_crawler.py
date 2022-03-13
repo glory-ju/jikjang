@@ -7,7 +7,7 @@ import multiprocessing
 # from multiprocessing import Process
 from loguru import logger
 import urllib.parse
-import db_mongo
+import db_conn
 
 class NaverNewsCrawler:
     def __init__(self):
