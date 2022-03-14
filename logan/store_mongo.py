@@ -177,7 +177,7 @@ class NaverNewsCrawler:
         logger.info(f'[{pid}][{cate}][{subcategory}] NewsCrawling Ended')
         logger.complete()
 
-    def start(self, start_time, config_t):
+    def start(self, config_t):
         # multiprocess 크롤링 시작
         logger.info('Naver News Crawling . . .start')
         logger.info(f'OS Type: {self.user_operating_system}')
@@ -194,7 +194,7 @@ class NaverNewsCrawler:
             w1.join()
             w2.join()
 
-        logger.info(f'{datetime.datetime.now() - start_time} BYE !!!!')
+        logger.info('BYE !!!!')
 
 if __name__ == '__main__':
 
@@ -213,7 +213,7 @@ if __name__ == '__main__':
         Crawler = NaverNewsCrawler()
 
         scheduler.add_job(func=Crawler.start, trigger='interval', seconds=int(config.get('DEFAULT', 'interval_time')),
-                          args=[start_time, config])
+                          args=[config])
         scheduler.start()
 
         while True: sleep(1)

@@ -52,7 +52,7 @@ class NaverNewsCrawler:
         soup = BeautifulSoup(page_response.content, 'lxml')
         news_list_select = soup.select('body > div > table > tr > td > div > div > ul > li > dl > dt:nth-child(1) > a')
 
-        logger.info(f'ㅋㅋ')
+        logger.info(f'20개')
         for i in news_list_select:
             url = i['href']
             url = url.replace('amp;', '')
@@ -63,11 +63,14 @@ class NaverNewsCrawler:
     def conn_mariadb(config_t):
         hostname = config_t['mariaDB']['hostname']
         port = config_t['mariaDB']['port']
-        username = urllib.parse.quote_plus(config_t['mariaDB']['username'])
-        password = urllib.parse.quote_plus(config_t['mariaDB']['password'])
+        # username = urllib.parse.quote_plus(config_t['mariaDB']['username'])
+        username = config_t['mariaDB']['username']
+        # password = urllib.parse.quote_plus(config_t['mariaDB']['password'])
+        password = config_t['mariaDB']['password']
         db_name = config_t['mariaDB']['db_name']
+        charset = config_t['mariaDB']['charset']
 
-        conn = pymysql.connect(host=hostname, port=port, user=username, password=password, database=db_name)
+        conn = pymysql.connect(host=hostname, port=int(port), user=username, password=password, database=db_name, charset=charset)
         logger.success('maria DB Connection Success')
         return conn
 
@@ -77,11 +80,25 @@ class NaverNewsCrawler:
         pid = os.getpid()
 
         try:
+            sql = '''
+            CREATE TABLE IF NOT EXISTS logan_test(
+                objectID varchar(24) NOT NULL PRIMARY KEY,
+                date varchar(8),
+                headline varchar(1024),
+                category varchar(100),
+                press varchar(100),
+                writer varchar(100),
+                content text,
+                url varchar(512),
+                news_time varchar(100))
+            '''
             maria = self.conn_mariadb(config_t)
             cur = maria.cursor()
+            cur.execute(sql)
         except Exception as eee:
             logger.critical(f'[{pid}] DB exception::{eee}')
             logger.critical(f'[{pid}] Crawling STOP ! ! !')
+            exit()
 
         logger.debug(f'[{pid}] DB connected')
 
@@ -163,10 +180,10 @@ class NaverNewsCrawler:
 
                     if content != '' and key != '':
                         try:
-                            sql = f"""INSERT INTO logan_test (objectID, date, headline, category, press, writer, content, url, news_time)
-                                    values({key}, {datetime.datetime.now().strftime('%Y-%m-%d')}, {title}, '경제', {media}, {writer}, {content}, {url_list[id]}, {date})"""
-                            logger.info(f'[{pid}][경제][{subcategory_name}] DB insert::{date}{title}')
-                            cur.execute(sql)
+                            query = f"""INSERT INTO logan_test (objectID, date, headline, category, press, writer, content, url, news_time)
+                                    VALUES ('{key}', '{date}', '{title}', '경제', '{media}', '{writer}', '{content}', '{url_list[id]}', '{time}')"""
+                            logger.info(f'[{pid}][경제][{subcategory_name}] DB insert::{title}')
+                            cur.execute(query)
 
                             duplicate = 0
                         except Exception as eee:
@@ -175,6 +192,7 @@ class NaverNewsCrawler:
 
                             if duplicate >= self.duplicate_count:
                                 break
+                        maria.commit()
                     elif content == '':
                         continue
                 if duplicate >= self.duplicate_count:
@@ -182,9 +200,10 @@ class NaverNewsCrawler:
                 if page_url.split('=')[-1] == str(totalpage): break
 
         logger.info(f'[{pid}][{cate}][{subcategory}] NewsCrawling Ended')
+        maria.close()
         logger.complete()
 
-    def start(self, start_time, config_t):
+    def start(self, config_t):
         # multiprocess 크롤링 시작
         logger.info('Naver News Crawling . . .start')
         logger.info(f'OS Type: {self.user_operating_system}')
@@ -201,7 +220,7 @@ class NaverNewsCrawler:
             w1.join()
             # w2.join()
 
-        logger.info(f'{datetime.datetime.now() - start_time}BYE !!!!')
+        logger.info('BYE !!!!')
 
 
 if __name__ == '__main__':
@@ -215,35 +234,15 @@ if __name__ == '__main__':
 
     config = configparser.ConfigParser()
     config.read('C:/Users/logan/PycharmProjects/jikjang/logan/config.cfg', encoding='UTF8')
-    conn = Crawler.conn_mariadb(config)
-    cur = conn.cursor()
-
-    sql = '''
-    CREATE TABLE IF NOT EXISTS logan_test(
-        objectID varchar(24) NOT NULL,
-        date varchar(8),
-        headline varchar(1024),
-        category varchar(100),
-        press varchar(100),
-        writer varchar(100),
-        content text,
-        url varchar(512),
-        news_time varchar(100),
-        PRIMARY KEY(objectID))
-    '''
-    cur.execute(sql)
-
-    conn.commit()
 
     logger.add(config.get('log', 'filename'), level=config.get('log', 'level'),
                rotation=config.get('log', 'rotation'), retention=int(config.get('log','retention')), enqueue=True,
                encoding='utf8')
 
     scheduler.add_job(func=Crawler.start, trigger='interval', seconds=int(config.get('DEFAULT', 'interval_time')),
-                      args=[start_time, config])
+                      args=[config])
     scheduler.start()
 
-    conn.close()
     while True: sleep(1)
 
 # import pymysql
