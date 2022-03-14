@@ -59,6 +59,7 @@ class NaverNewsCrawler:
             url_list.append(url)
         return url_list
 
+    # 마리아디비 연결
     @staticmethod
     def conn_mariadb(config_t):
         hostname = config_t['mariaDB']['hostname']
@@ -73,6 +74,54 @@ class NaverNewsCrawler:
         conn = pymysql.connect(host=hostname, port=int(port), user=username, password=password, database=db_name, charset=charset)
         logger.success('maria DB Connection Success')
         return conn
+
+    def article_element(self, id, url_list):
+        resp_1 = requests.get(url_list[id], headers=self.headers)
+        soup_1 = BeautifulSoup(resp_1.content, 'lxml')
+
+        sid1 = re.findall(r'\d+', url_list[id])[2]
+        sid2 = re.findall(r'\d+', url_list[id])[4]
+        oid = re.findall(r'\d+', url_list[id])[5]
+        aid = re.findall(r'\d+', url_list[id])[6]
+
+        try:
+            time = soup_1.find('span', attrs={'class': 't11'}).get_text()
+        except:
+            time = ''
+        try:
+            media = soup_1.find('img')['title']
+        except:
+            media = soup_1.find('img')['alt']
+        if soup_1.find('p', attrs={'class': 'b_text'}) == None:
+            writer = ''
+        elif soup_1.find('p', attrs={'class': 'b_text'}):
+            writer = soup_1.find('p', attrs={'class': 'b_text'}).get_text().strip()
+        try:
+            title = soup_1.find('h3', attrs={'id': 'articleTitle'}).get_text()
+        except:
+            title = soup_1.find('h4', attrs={'class': 'title'}).get_text()
+
+        try:
+            raw_content = soup_1.find('div', attrs={'id': 'articleBodyContents'})
+            if raw_content.select_one('em'):
+                raw_content.select_one('em').decompose()
+            content = ''.join(
+                raw_content.text.replace('    ', '').replace('\n', '').replace('\t', '').replace('\'', '').strip())
+        except:
+            content = ''
+        # try:
+        #     content = soup_1.find('div', attrs={'id': 'articleBody'})
+        # except:
+        #     content = ''
+
+        # elements = (date, sid1, sid2, oid, aid, time, media, writer, title, content, url_list[id])
+        # news_info_list.append(elements)
+
+        key = str(sid1) + str(sid2) + str(oid) + str(aid)
+        return [key, title, media, writer, content, time]
+
+    def make_query(self):
+        pass
 
     def crawler(self, days, config_t):
         news_info_list = []
@@ -104,10 +153,12 @@ class NaverNewsCrawler:
 
         cate = self.categories['경제']
 
+        # 경제 카테고리의 세부 카테고리 구하기
         # url = f'https://news.naver.com/main/list.naver?mode=LS2D&mid=shm&sid1={cate}&sid2={subcate}&date={int(date)}'
         find_subcate_url = f'https://news.naver.com/main/list.naver?mode=LS2D&mid=shm&sid1={cate}'
         find_subcate_res = requests.get(find_subcate_url, headers=self.headers)
         find_subcate_soup = BeautifulSoup(find_subcate_res.content, 'lxml')
+        # 세부 카테고리 find all
         subcate = find_subcate_soup.find('ul', attrs={'class': 'nav'}).find_all('li')
         subcategory_key_list = []
         for sub in subcate:
@@ -122,9 +173,11 @@ class NaverNewsCrawler:
         yesterday = date - datetime.timedelta(days=days)
         date = yesterday.strftime('%Y%m%d')
 
+
         for subcategory, subcategory_name in zip(subcategory_value_list, subcategory_key_list):
             logger.exception(f'[{pid}][{subcategory_name}] Crawling Start . . .')
             url = find_subcate_url + '&sid2=' + str(subcategory) + '&date=' + str(date)
+
             # totalpage는 네이버 페이지 구조를 이용해서 page=10000으로 지정해 totalpage를 알아냄
             # page=10000을 입력할 경우 페이지가 존재하지 않기 때문에 page=totalpage로 이동 됨 (Redirect)
             totalpage = self.find_news_totalpage(url + '&page=10000')
@@ -135,49 +188,15 @@ class NaverNewsCrawler:
                 url_list = self.find_news_article_url(page_url)
 
                 for id in range(len(url_list)):
-                    resp_1 = requests.get(url_list[id], headers=self.headers)
-                    soup_1 = BeautifulSoup(resp_1.content, 'lxml')
-
-                    sid1 = re.findall(r'\d+', url_list[id])[2]
-                    sid2 = re.findall(r'\d+', url_list[id])[4]
-                    oid = re.findall(r'\d+', url_list[id])[5]
-                    aid = re.findall(r'\d+', url_list[id])[6]
-                    try:
-                        time = soup_1.find('span', attrs={'class': 't11'}).get_text()
-                    except:
-                        time = ''
-                    try:
-                        media = soup_1.find('img')['title']
-                    except:
-                        media = soup_1.find('img')['alt']
-                    if soup_1.find('p', attrs={'class': 'b_text'}) == None:
-                        writer = ''
-                    elif soup_1.find('p', attrs={'class': 'b_text'}):
-                        writer = soup_1.find('p', attrs={'class': 'b_text'}).get_text().strip()
-                    try:
-                        title = soup_1.find('h3', attrs={'id': 'articleTitle'}).get_text()
-                    except:
-                        title = soup_1.find('h4', attrs={'class': 'title'}).get_text()
-
-                    try:
-                        raw_content = soup_1.find('div', attrs={'id': 'articleBodyContents'})
-                        if raw_content.select_one('em'):
-                            raw_content.select_one('em').decompose()
-                        content = ''.join(raw_content.text.replace('    ', '').replace('\n', '').replace('\t', '').replace('\'', '').strip())
-                    except:
-                        content = ''
-                    # try:
-                    #     content = soup_1.find('div', attrs={'id': 'articleBody'})
-                    # except:
-                    #     content = ''
-
-                    elements = (date, sid1, sid2, oid, aid, time, media, writer, title, content, url_list[id])
-                    news_info_list.append(elements)
-
-                    key = str(sid1) + str(sid2) + str(oid) + str(aid)
+                    elements = self.article_element(id, url_list)
+                    key = elements[0]
+                    title = elements[1]
+                    media = elements[2]
+                    writer = elements[3]
+                    content = elements[4]
+                    time = elements[5]
 
                     # maria
-
                     if content != '' and key != '':
                         try:
                             query = f"""INSERT INTO logan_test (objectID, date, headline, category, press, writer, content, url, news_time)
@@ -194,6 +213,7 @@ class NaverNewsCrawler:
                                 break
                         maria.commit()
                     elif content == '':
+                        logger.exception('NOT INCLUDED CONTENTS !!!')
                         continue
                 if duplicate >= self.duplicate_count:
                     break
@@ -210,15 +230,15 @@ class NaverNewsCrawler:
 
         workers1, workers2 = [], []
         proc1 = Process(target=self.crawler, args=(0, config_t))
-        # proc2 = Process(target=self.crawler, args=(1, config_t))
+        proc2 = Process(target=self.crawler, args=(1, config_t))
         workers1.append(proc1)
-        # workers2.append(proc2)
+        workers2.append(proc2)
         proc1.start()
-        # proc2.start()
+        proc2.start()
 
         for w1, w2 in zip(workers1, workers2):
             w1.join()
-            # w2.join()
+            w2.join()
 
         logger.info('BYE !!!!')
 
@@ -244,16 +264,3 @@ if __name__ == '__main__':
     scheduler.start()
 
     while True: sleep(1)
-
-# import pymysql
-#
-# conn = pymysql.connect(host='database-1.c1pvc7savwst.ap-northeast-2.rds.amazonaws.com', user='NSroot', password='nsroot1234)(*&', port=3306, database='NewsSalad_dev_01', charset='utf8mb4')
-# cur = conn.cursor()
-#
-# # sql = 'create table if not exists logan_test(id varchar(256) not null, date varchar(8))'
-# sql = 'show tables'
-# cur.execute(sql)
-# for i in cur:
-#     print(i)
-# conn.commit()
-# conn.close()
