@@ -75,7 +75,7 @@ class NaverNewsCrawler:
         logger.success('maria DB Connection Success')
         return conn
 
-    def article_element(self, id, url_list):
+    def article_element(self, id, url_list): # 디비에 저장할 컬럼값 파싱
         resp_1 = requests.get(url_list[id], headers=self.headers)
         soup_1 = BeautifulSoup(resp_1.content, 'lxml')
 
