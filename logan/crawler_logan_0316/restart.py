@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 import requests
-import re, os, configparser, platform
+import re, os, configparser, platform, pymysql
 import pandas as pd
 import urllib.parse
+import argparse
 from bs4 import BeautifulSoup
 from time import sleep
 from loguru import logger
@@ -10,7 +11,7 @@ from multiprocessing import Process
 from datetime import datetime, timedelta
 
 from exceptions import *
-from db_mongo import set_mongodb, mongo_insert
+import db_mongo
 
 #cron
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -20,7 +21,8 @@ from tendo import singleton
 
 
 class NaverNewsCrawler():
-    def __init__(self):
+    def __init__(self, config):
+        self.config = config
         self.headers = {
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36', }
         self.categories = {'정치': 100, '경제': 101, '사회': 102, '생활/문화': 103, 'IT/과학': 105, '세계': 104}
@@ -38,7 +40,7 @@ class NaverNewsCrawler():
         self.selected_categories = []
         self.selected_subcategories = []
 
-        self.date = {'start':20220315, 'end': 20220316}
+        self.date = {'start':20220316, 'end': 20220316}
         self.user_operating_system = str(platform.system())
         self.duplicate_count = 5
 
@@ -134,24 +136,69 @@ class NaverNewsCrawler():
             remaining_tries -= 1
         raise ResponseTimeout()
 
-    @staticmethod
-    def conn_mongodb(config_t):
-        hostname = config_t['mongoDB']['hostname']
-        port = config_t['mongoDB']['port']
-        username = urllib.parse.quote_plus(config_t['mongoDB']['username'])
-        password = urllib.parse.quote_plus(config_t['mongoDB']['password'])
-        db_name = config_t['mongoDB']['db_name']
+    def conn_mongodb(self):
+        hostname = self.config['mongoDB']['hostname']
+        port = self.config['mongoDB']['port']
+        username = urllib.parse.quote_plus(self.config['mongoDB']['username'])
+        password = urllib.parse.quote_plus(self.config['mongoDB']['password'])
+        db_name = self.config['mongoDB']['db_name']
 
-        return set_mongodb(hostname, port, username, password, db_name)
+        return db_mongo.set_mongodb(hostname, port, username, password, db_name)
 
-    def crawling(self, category_name, subcategory, config_t):
+    def conn_mariadb(self):
+        query = '''
+        CREATE TABLE IF NOT EXISTS logan_test(
+        objectID varchar(24) not null primary key,
+        date varchar(8),
+        headline varchar(1024),
+        category varchar(100),
+        press varchar(100),
+        content text,
+        url varchar(512)
+        '''
+        hostname = self.config['mariaDB']['hostname']
+        port = self.config['mariaDB']['port']
+        username = self.config['mariaDB']['username']
+        password = self.config['mariaDB']['password']
+        database = self.config['mariaDB']['database']
+        charset = self.config['mariaDB']['charset']
+
+        conn = pymysql.connect(host=hostname, port=int(port), username=username, password=password, database=database, charset=charset)
+        return conn.cursor(query)
+
+    def content_preprocessing(self, str_content):
+        special_symbol = re.compile('[\{\}\/?,;:|*~`!^\-_+<>@\#$&▲ㅣ▶◆◇◀■【】\\\=\'\"]')
+        special_symbol_2 = re.compile('[\{\}\/\[\]?,;:|\)*~`!^\-_+<>@\#$&▲ㅣ▶◆◇◀■【】\\\=\(\'\"]')
+        content_pattern = re.compile('본문 내용|TV플레이어| 동영상 뉴스|flash 오류를 우회하기 위한 함수 추가function  flash removeCallback|tt|앵커 멘트|xa0|사진')
+        context_pattern = re.compile(r'앵커멘트|.사진=\S+.|.\S+제공.|촬영\S\S\S\S|\S\S\S 기자|\[(.*?)\]|\]|\((.*?)뉴스\)|\S{2,4}뉴스')
+        bot_text = re.compile('기사 자동생성 알고리즘|로보뉴스|로봇뉴스|로보 뉴스|로봇 뉴스|로봇 기자')
+
+        text1 = str_content.replace('\\n', '').replace('\\t', '').replace('\\r', '')
+        text2 = re.sub(special_symbol, ' ', text1)
+        text3 = re.sub(content_pattern, ' ', text2)
+        text4 = re.sub(context_pattern, ' ', text3)
+        text5 = re.sub(' +', ' ', text4).lstrip()
+        reversed_content = ''.join(reversed(text5))
+        content = ''
+        for i in range(len(text5)):
+            # reverse된 기사 내용 중, '.다'로 끝나는 경우 기사 내용이 끝난 것이기 때문에 기사 내용이 끝난 후의 광고, 기자 등의 정보는 다 지움
+            if (reversed_content[i:i+2] == '.다') or (reversed_content[i:i+2] =='.시공'):
+                content = ''.join(reversed(reversed_content[i:]))
+                break
+
+        if bot_text.findall(content) or (len(content) <= 40): # 자동생성 글자가 들어가면 본문 아예 비움 / 짧은 기사 거름
+            return None
+        else: return content
+
+
+    def crawling(self, category_name, subcategory):
         pid = os.getpid()
         mongo = None
 
         logger.info(f'[{pid}][{category_name}] Crawling Start . . . . .')
 
         try:
-            mongo = self.conn_mongodb(config_t)
+            mongo = self.conn_mongodb()
         except Exception as eee:
             logger.critical(f'[{pid}][{category_name}] DB Exception::{eee}')
             logger.critical(f'[{pid}][{category_name}] Crawling STOP !!!!!!')
@@ -185,7 +232,7 @@ class NaverNewsCrawler():
             logger.info(f'[{pid}][{category_name}][{sub}] 크롤링 시작...')
 
             duplicate = 0
-            print(day_urls)
+            # print(day_urls)
             # sub 카테고리 리스트 > 날짜별 리스트
             for i in day_urls:
                 regex = re.compile(r'date=(\d+)')
@@ -291,7 +338,7 @@ class NaverNewsCrawler():
                         # DB insert
                         if str_content != '' and key != '':
                             try:
-                                mongo_insert({'_id':key, 'sid1':sid1, 'sid2':sid2, 'oid':oid, 'aid':aid,
+                                db_mongo.mongo_insert({'_id':key, 'sid1':sid1, 'sid2':sid2, 'oid':oid, 'aid':aid,
                                               'news_date': ne_date, 'category': category_name,
                                               'subcategory': sub, 'press':str_press, 'writer':str_writer, 'headline':str_headline,
                                               'body_raw':str_content, 'article_date':str_article_date_input,
@@ -306,6 +353,7 @@ class NaverNewsCrawler():
 
                                 if duplicate >= self.duplicate_count:
                                     break
+
                         elif str_content == '':
                             continue
 
@@ -319,7 +367,7 @@ class NaverNewsCrawler():
         logger.info(f'[{pid}][{category_name}] NewsCrawling Ended')
         logger.complete()
 
-    def start(self, config_t):
+    def start(self):
         # MultiProcessing
         logger.info('Naver News Crawling ... start')
         logger.info(f'OS Type: {self.user_operating_system}')
@@ -328,14 +376,14 @@ class NaverNewsCrawler():
         yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
 
         self.set_date_range(yesterday, today)
-        self.duplicate_count = int(config_t['DEFAULT']['duplicate_count'])
+        self.duplicate_count = int(self.config['DEFAULT']['duplicate_count'])
 
         logger.info(self.date)
 
         workers = []
         if self.selected_subcategories is not None:
             for subcategory_name in self.selected_subcategories:
-                proc = Process(target=self.crawling, args=(self.selected_categories[0], subcategory_name, config_t))
+                proc = Process(target=self.crawling, args=(self.selected_categories[0], subcategory_name))
                 workers.append(proc)
                 proc.start()
 
@@ -345,34 +393,52 @@ class NaverNewsCrawler():
             logger.info('BYE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
         else:
             for category_name in self.selected_categories:
-                proc2 = Process(target=self.crawling, args=(category_name, None, config_t))
+                proc2 = Process(target=self.crawling, args=(category_name, None))
                 workers.append(proc2)
                 proc2.start()
 
             for w2 in workers:
                 w2.join()
 
-                logger.info('BYE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+            logger.info('BYE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+
+def main(config, from_date, to_date=None):
+    CNN = NaverNewsCrawler(config)
+    CNN.conn_mongodb()
+    CNN.conn_mariadb()
 
 if __name__ == '__main__':
     me = singleton.SingleInstance()
 
+    parser = argparse.ArgumentParser(description='DB STORE via ZMQ')
+    parser.add_argument('-c', '--cfg', nargs='?', required=True, default='./news.cfg', metavar='CFG',
+                        help='set config file')
+    parser.add_argument('--start', nargs='?', metavar='YYYYmmDD', help='set start date')
+    parser.add_argument('--end', nargs='?', metavar='YYYYmmDD', help='set end date')
+    args = parser.parse_args()
+
     config = None
     try:
         config = configparser.ConfigParser()
-        config.read('./news.cfg', encoding='UTF8')
+        config.read(args.cfg, encoding='UTF8')
     except Exception as e:
         exit()
 
+    if args.end:
+        logger.add(config.get('log', 'filename_zmq'), level=config.get('log', 'level'), rotation=config.get('log', 'rotation'),
+                              retention=int(config.get('log', 'retention')), enqueue=True, encofig='UTF8')
+        main(config, args.start, args.end)
+
     logger.add(config.get('log', 'filename'), level=config.get('log', 'level'), rotation=config.get('log', 'rotation'),
                           retention=int(config.get('log', 'retention')), enqueue=True, encoding='UTF8')
+
     scheduler = BackgroundScheduler()
-    crawler = NaverNewsCrawler()
+    crawler = NaverNewsCrawler(config)
 
     crawler.set_category(config.get('DEFAULT', 'Main_Category'))
     crawler.set_subcategory(config.get('DEFAULT', 'Sub_Category'))
 
-    scheduler.add_job(func=crawler.start, trigger='interval', seconds=int(config.get('DEFAULT', 'interval_time')), args=[config])
+    scheduler.add_job(func=crawler.start, trigger='interval', seconds=int(config.get('DEFAULT', 'interval_time')))
 
     scheduler.start()
 
