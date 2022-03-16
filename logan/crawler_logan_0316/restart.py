@@ -112,7 +112,7 @@ class NaverNewsCrawler():
             made_urls_days.append(url)
         return made_urls_days
 
-    # [경제] - [금융] 카테고리의 당일 총 페이지 수 추출
+    # 서브카테고리별 총 페이지 수 구하기
     def find_news_totalpage(self, url):
         try:
             totalpage_url = url
