@@ -166,31 +166,6 @@ class NaverNewsCrawler():
         conn = pymysql.connect(host=hostname, port=int(port), username=username, password=password, database=database, charset=charset)
         return conn.cursor(query)
 
-    def content_preprocessing(self, str_content):
-        special_symbol = re.compile('[\{\}\/?,;:|*~`!^\-_+<>@\#$&▲ㅣ▶◆◇◀■【】\\\=\'\"]')
-        special_symbol_2 = re.compile('[\{\}\/\[\]?,;:|\)*~`!^\-_+<>@\#$&▲ㅣ▶◆◇◀■【】\\\=\(\'\"]')
-        content_pattern = re.compile('본문 내용|TV플레이어| 동영상 뉴스|flash 오류를 우회하기 위한 함수 추가function  flash removeCallback|tt|앵커 멘트|xa0|사진')
-        context_pattern = re.compile(r'앵커멘트|.사진=\S+.|.\S+제공.|촬영\S\S\S\S|\S\S\S 기자|\[(.*?)\]|\]|\((.*?)뉴스\)|\S{2,4}뉴스')
-        bot_text = re.compile('기사 자동생성 알고리즘|로보뉴스|로봇뉴스|로보 뉴스|로봇 뉴스|로봇 기자')
-
-        text1 = str_content.replace('\\n', '').replace('\\t', '').replace('\\r', '')
-        text2 = re.sub(special_symbol, ' ', text1)
-        text3 = re.sub(content_pattern, ' ', text2)
-        text4 = re.sub(context_pattern, ' ', text3)
-        text5 = re.sub(' +', ' ', text4).lstrip()
-        reversed_content = ''.join(reversed(text5))
-        content = ''
-        for i in range(len(text5)):
-            # reverse된 기사 내용 중, '.다'로 끝나는 경우 기사 내용이 끝난 것이기 때문에 기사 내용이 끝난 후의 광고, 기자 등의 정보는 다 지움
-            if (reversed_content[i:i+2] == '.다') or (reversed_content[i:i+2] =='.시공'):
-                content = ''.join(reversed(reversed_content[i:]))
-                break
-
-        if bot_text.findall(content) or (len(content) <= 40): # 자동생성 글자가 들어가면 본문 아예 비움 / 짧은 기사 거름
-            return None
-        else: return content
-
-
     def crawling(self, category_name, subcategory):
         pid = os.getpid()
         mongo = None
@@ -402,10 +377,36 @@ class NaverNewsCrawler():
 
             logger.info('BYE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
 
-def main(config, from_date, to_date=None):
+def content_preprocessing(str_content):
+    special_symbol = re.compile('[\{\}\/?,;:|*~`!^\-_+<>@\#$&▲ㅣ▶◆◇◀■【】\\\=\'\"]')
+    special_symbol_2 = re.compile('[\{\}\/\[\]?,;:|\)*~`!^\-_+<>@\#$&▲ㅣ▶◆◇◀■【】\\\=\(\'\"]')
+    content_pattern = re.compile('본문 내용|TV플레이어| 동영상 뉴스|flash 오류를 우회하기 위한 함수 추가function  flash removeCallback|tt|앵커 멘트|xa0|사진')
+    context_pattern = re.compile(r'앵커멘트|.사진=\S+.|.\S+제공.|촬영\S\S\S\S|\S\S\S 기자|\[(.*?)\]|\]|\((.*?)뉴스\)|\S{2,4}뉴스')
+    bot_text = re.compile('기사 자동생성 알고리즘|로보뉴스|로봇뉴스|로보 뉴스|로봇 뉴스|로봇 기자')
+
+    text1 = str_content.replace('\\n', '').replace('\\t', '').replace('\\r', '')
+    text2 = re.sub(special_symbol, ' ', text1)
+    text3 = re.sub(content_pattern, ' ', text2)
+    text4 = re.sub(context_pattern, ' ', text3)
+    text5 = re.sub(' +', ' ', text4).lstrip()
+    reversed_content = ''.join(reversed(text5))
+    content = ''
+    for i in range(len(text5)):
+        # reverse된 기사 내용 중, '.다'로 끝나는 경우 기사 내용이 끝난 것이기 때문에 기사 내용이 끝난 후의 광고, 기자 등의 정보는 다 지움
+        if (reversed_content[i:i+2] == '.다') or (reversed_content[i:i+2] =='.시공'):
+            content = ''.join(reversed(reversed_content[i:]))
+            break
+
+    if bot_text.findall(content) or (len(content) <= 40): # 자동생성 글자가 들어가면 본문 아예 비움 / 짧은 기사 거름
+        return None
+    else: return content
+
+def main(config):
     CNN = NaverNewsCrawler(config)
-    CNN.conn_mongodb()
-    CNN.conn_mariadb()
+    conn = CNN.conn_mongodb()['test_data']
+
+    # mongodb에서 100개 데이터가 생성되면 가지고 오기. zmq로
+
 
 if __name__ == '__main__':
     me = singleton.SingleInstance()
@@ -413,10 +414,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='DB STORE via ZMQ')
     parser.add_argument('-c', '--cfg', nargs='?', required=True, default='./news.cfg', metavar='CFG',
                         help='set config file')
-    parser.add_argument('--start', nargs='?', metavar='YYYYmmDD', help='set start date')
-    parser.add_argument('--end', nargs='?', metavar='YYYYmmDD', help='set end date')
     args = parser.parse_args()
 
+    config = configparser.ConfigParser()
+    config.read(args.cfg, encoding='UTF8')
     config = None
     try:
         config = configparser.ConfigParser()
@@ -424,21 +425,21 @@ if __name__ == '__main__':
     except Exception as e:
         exit()
 
-    if args.end:
-        logger.add(config.get('log', 'filename_zmq'), level=config.get('log', 'level'), rotation=config.get('log', 'rotation'),
-                              retention=int(config.get('log', 'retention')), enqueue=True, encofig='UTF8')
-        main(config, args.start, args.end)
+    # if args.end:
+    #     logger.add(config.get('log', 'filename_zmq'), level=config.get('log', 'level'), rotation=config.get('log', 'rotation'),
+    #                           retention=int(config.get('log', 'retention')), enqueue=True, encofig='UTF8')
+    #     main(config, args.start, args.end)
 
-    logger.add(config.get('log', 'filename'), level=config.get('log', 'level'), rotation=config.get('log', 'rotation'),
-                          retention=int(config.get('log', 'retention')), enqueue=True, encoding='UTF8')
+    logger.add(config['log']['filename'], level=config['log']['level'], rotation=config['log']['rotation'],
+                          retention=int(config['log']['retention']), enqueue=True, encoding='UTF8')
 
     scheduler = BackgroundScheduler()
     crawler = NaverNewsCrawler(config)
 
-    crawler.set_category(config.get('DEFAULT', 'Main_Category'))
-    crawler.set_subcategory(config.get('DEFAULT', 'Sub_Category'))
+    crawler.set_category(config['DEFAULT']['Main_Category'])
+    crawler.set_subcategory(config['DEFAULT']['Sub_Category'])
 
-    scheduler.add_job(func=crawler.start, trigger='interval', seconds=int(config.get('DEFAULT', 'interval_time')))
+    scheduler.add_job(func=crawler.start, trigger='interval', seconds=int(config['DEFAULT']['interval_time']))
 
     scheduler.start()
 
