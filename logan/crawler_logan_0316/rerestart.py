@@ -45,14 +45,6 @@ class NaverNewsCrawler():
         self.user_operating_system = str(platform.system())
         self.duplicate_count = 5
 
-        # self.context_push = zmq.Context()
-        # self.z_socket_push = self.context_push.socket(zmq.PUSH)
-        # self.z_socket_push.bind("tcp://*:5590")
-        #
-        # self.context_pull = zmq.Context()
-        # self.z_socket_pull = self.context_pull.socket(zmq.PULL)
-        # self.z_socket_pull.bind("tcp://*:95195")
-
     def set_category(self, *args):
         if args[0] == '':
             self.selected_categories = ['경제', '정치', '사회', '생활/문화', '세계', 'IT/과학']
@@ -154,19 +146,6 @@ class NaverNewsCrawler():
 
         return db_mongo.set_mongodb(hostname, port, username, password, db_name)
 
-    # def conn_mariadb(self):
-    #     hostname = self.config['mariaDB']['hostname']
-    #     port = self.config['mariaDB']['port']
-    #     username = urllib.parse.quote_plus(self.config['mariaDB']['username'])
-    #     password = urllib.parse.quote_plus(self.config['mariaDB']['password'])
-    #     database = self.config['mariaDB']['database']
-    #     charset = self.config['mariaDB']['charset']
-    #
-    #     conn = pymysql.connect(host=hostname, port=int(port), user=username, password=password, database=database, charset=charset)
-    #     logger.info('maria DB connection SUCCESS!!!')
-    #
-    #     return conn
-
     def conn_mariadb(self):
         try:
             conn = pymysql.connect(host=self.config['mariaDB']['hostname'],
@@ -174,7 +153,6 @@ class NaverNewsCrawler():
                                    password=self.config['mariaDB']['password'],
                                    db=self.config['mariaDB']['database'],
                                    charset=self.config['mariaDB']['charset'])
-            # self.conn = conn
             logger.success('DB connection success')
             return conn
         except Exception as ee:
@@ -183,6 +161,10 @@ class NaverNewsCrawler():
     def crawling(self, category_name, subcategory):
         pid = os.getpid()
         mongo = None
+
+        context_push = zmq.Context()
+        z_socket_push = context_push.socket(zmq.PUSH)
+        z_socket_push.connect("tcp://127.0.0.1:61595")
 
         logger.info(f'[{pid}][{category_name}] Crawling Start . . . . .')
 
@@ -216,6 +198,7 @@ class NaverNewsCrawler():
             urls_category.append(url)
             subcategory_names.append(subcategory)
 
+        send_list, news_list = [], []
         for url, sub in zip(urls_category, subcategory_names):
             day_urls = self.make_news_page_url(url, self.date['start'], self.date['end'])
             logger.info(f'[{pid}][{category_name}][{sub}] 크롤링 시작...')
@@ -327,13 +310,21 @@ class NaverNewsCrawler():
                         # DB insert
                         if str_content != '' and key != '':
                             try:
-                                mongo_document_elements = {'_id':key, 'sid1':sid1, 'sid2':sid2, 'oid':oid, 'aid':aid,
-                                              'news_date': ne_date, 'category': category_name,
-                                              'subcategory': sub, 'press':str_press, 'writer':str_writer, 'headline':str_headline,
-                                              'body_raw':str_content, 'article_date':str_article_date_input,
-                                              'article_editdate':str_article_date_edit, 'content_url':art_url,
-                                              'insertTime':datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')}
-                                db_mongo.mongo_insert(mongo_document_elements,'test_data', mongo)
+                                mongo_document_elements = {'_id': key, 'sid1': sid1, 'sid2': sid2, 'oid': oid,
+                                                           'aid': aid,
+                                                           'news_date': ne_date, 'category': category_name,
+                                                           'subcategory': sub, 'press': str_press, 'writer': str_writer,
+                                                           'headline': str_headline,
+                                                           'body_raw': str_content,
+                                                           'article_date': str_article_date_input,
+                                                           'article_editdate': str_article_date_edit,
+                                                           'content_url': art_url,
+                                                           'insertTime': datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')}
+                                # mongo db insert
+                                db_mongo.mongo_insert(mongo_document_elements, 'test_data', mongo)
+                                # zmq SEND
+                                z_socket_push.send_json(mongo_document_elements)
+
                                 logger.info(f'[{pid}][{category_name}][{sub}] DB insert::{str_headline}')
 
                                 duplicate = 0
@@ -346,7 +337,7 @@ class NaverNewsCrawler():
 
                         elif str_content == '':
                             continue
-
+                    news_list.append('exit')
                     if duplicate >= self.duplicate_count:
                         break
 
@@ -364,30 +355,36 @@ class NaverNewsCrawler():
 
         today = datetime.now().strftime('%Y%m%d')
         yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
+        # today, yesterday = 220309, 220308
 
         self.set_date_range(yesterday, today)
         self.duplicate_count = int(self.config['DEFAULT']['duplicate_count'])
 
         logger.info(self.date)
 
-        workers = []
+        workers1 = []
+        workers2 = []
         if self.selected_subcategories is not None:
             for subcategory_name in self.selected_subcategories:
-                proc = Process(target=self.crawling, args=(self.selected_categories[0], subcategory_name))
-                workers.append(proc)
-                proc.start()
+                proc1 = Process(target=self.crawling, args=(self.selected_categories[0], subcategory_name))
+                proc2 = Process(target=self.crawling, args=(self.selected_categories[1], subcategory_name))
+                workers1.append(proc1)
+                workers2.append(proc2)
+                proc1.start()
+                proc2.start()
 
-            for w in workers:
-                w.join()
+            for w1, w2 in zip(workers1, workers2):
+                w1.join()
+                w2.join()
 
             logger.info('BYE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
         else:
             for category_name in self.selected_categories:
                 proc2 = Process(target=self.crawling, args=(category_name, None))
-                workers.append(proc2)
+                workers1.append(proc2)
                 proc2.start()
 
-            for w2 in workers:
+            for w2 in workers1:
                 w2.join()
 
             logger.info('BYE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
@@ -416,87 +413,17 @@ def content_preprocessing(str_content):
         return None
     else: return content
 
-def main_preprocessig_content(config):
-    CNN = NaverNewsCrawler(config)
-    conn = CNN.conn_mongodb()['test_data']
+def main_preprocessig_content(mongo_dict):
+    raw_body = mongo_dict['body_raw']
+    soup = BeautifulSoup(raw_body, 'lxml')
+    parsing = soup.find('div', {'id':'articleBodyContents'})
+    content = parsing.text.strip()
+    pre_content = content_preprocessing(content)
 
-    # mongodb에서 100개 데이터가 생성되면 가지고 오기. zmq로
-    datas = conn.find()
-
-    content_list = []
-    # for data in datas:
-    #     sid1 = data['sid1']
-    #     sid2 = data['sid2']
-    #     oid = data['oid']
-    #     aid = data['aid']
-    #     id_list.append([sid1, sid2, oid, aid])
-    #     print([sid1, sid2, oid, aid])
-    #
-    # headers = {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36', }
-    # for id in id_list:
-    #     url = f'https://news.naver.com/main/read.naver?mode=LS2D&mid=shm&sid1={id[0]}&sid2={id[1]}&oid={id[2]}&aid={id[3]}'
-    #     req = requests.get(url, headers=headers)
-    #     soup = BeautifulSoup(req.content)
-    news_datas=[]
-    for i, data in enumerate(datas):
-        body_raw = data['body_raw']
-        soup = BeautifulSoup(body_raw, 'lxml')
-        contents = soup.find('div', {'id':'articleBodyContents'})
-        content = contents.text.strip()
-        pre_content = content_preprocessing(content)
-        content_list.append(pre_content)
-        news_datas.append(data)
-    logger.info('mongoDB raw contents -> preprocessing content SUCCESS!!!')
-    return news_datas, content_list
-
-        # for content in contents.children:
-        #     if type(content) == Comment:
-        #         continue
-        #     elif type(content) == NavigableString:
-        #         pre_content += content
-        #     elif type(content) == Tag:
-        #     if i == 99 and type(content) == bs4.element.Tag:
-        #         print(i, type(content), content)
+    return pre_content
 
 def zmq1(config):
-    query = '''
-            CREATE TABLE IF NOT EXISTS logan_test(
-            objectID varchar(24) not null primary key,
-            date varchar(8),
-            headline varchar(1024),
-            category varchar(100),
-            press varchar(100),
-            content text,
-            url varchar(512))
-            '''
-    CNN = NaverNewsCrawler(config)
-    maria_conn = CNN.conn_mariadb()
-    cursor = maria_conn.cursor()
-    cursor.execute(query)
-    logger.info('TABLE CREATION SUCCESS')
-
-    config = configparser.ConfigParser()
-    config.read('./news.cfg', encoding='utf8')
-    datas, contents = main_preprocessig_content(config)
-
-    for i, data in enumerate(datas):
-        print('왜 안 돼')
-        objectID = data['_id']
-        date = data['news_date']
-        headline = data['headline']
-        category = data['category']
-        press = data['press']
-        url = data['content_url']
-        print(objectID, date, headline, category, press, url)
-        print(contents[i])
-        insert_query = f"""INSERT INTO logan_test VALUES 
-        ('{objectID}', '{date}', '{headline}', '{category}', '{press}', '{contents[i]}', '{url}')
-        """
-        cursor.execute(insert_query)
-        cursor.commit()
-    logger.info('mongo DB -> preprocessing content -> maria DB // PUSH SUCCESS!!')
-    maria_conn.close()
-    logger.complete()
+    pass
 
 def zmq2(config):
     query = '''
@@ -514,41 +441,41 @@ def zmq2(config):
     cursor = maria_conn.cursor()
     cursor.execute(query)
     logger.info('TABLE CREATION SUCCESS')
-
-    config = configparser.ConfigParser()
-    config.read('./news.cfg', encoding='utf8')
-    datas, contents = main_preprocessig_content(config)
-
-
-    for i, data in enumerate(datas):
-        print('=================================')
-
-        objectID = data['_id']
-        date = data['news_date']
-        headline = data['headline']
-        category = data['category']
-        press = data['press']
-        url = data['content_url']
-        print(objectID)
-        print(date)
-        print(headline)
-        print(category)
-        print(press)
-        print(url)
-        print('+++++++++++++++++++++++++++++++')
-        print(contents[i])
-        insert_query = f"""INSERT INTO logan_test1 VALUES 
-            ("{objectID}", "{date}", "{headline}", "{category}", "{press}", "{contents[i]}", "{url}")
-            """
-        # print(insert_query)
-        try:
-            cursor.execute(insert_query)
-            maria_conn.commit()
-        except Exception as eee:
-            logger.info(eee)
-    logger.info('mongo DB -> preprocessing content -> maria DB // PUSH SUCCESS!!')
-    maria_conn.close()
-    logger.complete()
+    #
+    # config = configparser.ConfigParser()
+    # config.read('./news.cfg', encoding='utf8')
+    # datas, contents = main_preprocessig_content(config)
+    #
+    #
+    # for i, data in enumerate(datas):
+    #     print('=================================')
+    #
+    #     objectID = data['_id']
+    #     date = data['news_date']
+    #     headline = data['headline']
+    #     category = data['category']
+    #     press = data['press']
+    #     url = data['content_url']
+    #     print(objectID)
+    #     print(date)
+    #     print(headline)
+    #     print(category)
+    #     print(press)
+    #     print(url)
+    #     print('+++++++++++++++++++++++++++++++')
+    #     print(contents[i])
+    #     insert_query = f"""INSERT INTO logan_test1 VALUES
+    #         ("{objectID}", "{date}", "{headline}", "{category}", "{press}", "{contents[i]}", "{url}")
+    #         """
+    #     # print(insert_query)
+    #     try:
+    #         cursor.execute(insert_query)
+    #         maria_conn.commit()
+    #     except Exception as eee:
+    #         logger.info(eee)
+    # logger.info('mongo DB -> preprocessing content -> maria DB // PUSH SUCCESS!!')
+    # maria_conn.close()
+    # logger.complete()
 
 if __name__ == '__main__':
     me = singleton.SingleInstance()
@@ -571,15 +498,15 @@ if __name__ == '__main__':
     #     main(config, args.start, args.end)
 
     logger.add(config['log']['filename'], level=config['log']['level'], rotation=config['log']['rotation'],
-                          retention=int(config['log']['retention']), enqueue=True, encoding='UTF8')
+               retention=int(config['log']['retention']), enqueue=True, encoding='UTF8')
 
     crawler = NaverNewsCrawler(config)
     crawler.set_category(config['DEFAULT']['Main_Category'])
     crawler.set_subcategory(config['DEFAULT']['Sub_Category'])
-    crawler.start()
+    # crawler.start()
+    # crawler.crawling('경제','금융')
     # main_preprocessig_content(config)
     # zmq2(config)
-'''
     scheduler = BackgroundScheduler()
     crawler = NaverNewsCrawler(config)
 
@@ -591,7 +518,6 @@ if __name__ == '__main__':
     scheduler.start()
 
     while True: sleep(1)
-'''
 
 
 
